@@ -1,0 +1,29 @@
+# Dependencies — reinstalled inside the image from package.json + bun.lock
+node_modules/
+
+# Prisma client is regenerated during the build
+src/generated/
+
+# Secrets — never bake these into an image; pass them in at run time
+.env
+.env.*
+!.env.example
+
+# VCS / tooling
+.git/
+.gitignore
+.agents/
+.claude/
+.windsurf/
+
+# Docker files themselves
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.*.yml
+
+# Docs and editor cruft
+README.md
+*.md
+.DS_Store
+*.log

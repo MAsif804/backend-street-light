@@ -1,0 +1,28 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: 517517
+      POSTGRES_DB: street-lights
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  # Added your Hono API service here
+  hono-api:
+    build: .
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      # Internal network URL using the service name 'postgres' instead of 'localhost'
+      DATABASE_URL: "postgresql://postgres:517517@postgres:5432/street-lights?schema=public"
+      NODE_ENV: production
+    depends_on:
+      - postgres
+
+volumes:
+  pgdata:
