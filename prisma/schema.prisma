@@ -258,3 +258,53 @@ model TimePair {
 
   @@index([conditionId])
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Geography — City ─> Cluster ─> Location
+//   A city has many clusters (zones); a cluster has many locations (streets).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A city (e.g. "Islamabad"). Names are unique.
+model City {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clusters Cluster[]
+}
+
+/// A cluster / zone within a city (e.g. "Red Zone", "Blue Area", "Main Arteries").
+model Cluster {
+  id   String @id @default(cuid())
+  name String
+
+  cityId String
+  city   City   @relation(fields: [cityId], references: [id], onDelete: Cascade)
+
+  locations Location[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // A cluster name is unique within its city.
+  @@unique([cityId, name])
+  @@index([cityId])
+}
+
+/// A location / street / road that belongs to a cluster (e.g. "Jinnah Avenue").
+/// The same street name may appear under more than one cluster.
+model Location {
+  id   String @id @default(cuid())
+  name String
+
+  clusterId String
+  cluster   Cluster @relation(fields: [clusterId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // A location name is unique within its cluster.
+  @@unique([clusterId, name])
+  @@index([clusterId])
+}

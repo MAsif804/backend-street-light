@@ -6,6 +6,9 @@ import deviceModel from "./routes/device-model";
 import light from "./routes/light";
 import auth from "./routes/auth-routes";
 import user from "./routes/user";
+import city from "./routes/city";
+import cluster from "./routes/cluster";
+import location from "./routes/location";
 
 
 
@@ -20,6 +23,9 @@ app.route("/device-models", deviceModel);
 app.route("/lights", light);
 app.route("/auth", auth);
 app.route("/users", user);
+app.route("/cities", city);
+app.route("/clusters", cluster);
+app.route("/locations", location);
 
 export default {
   port: 3000,
