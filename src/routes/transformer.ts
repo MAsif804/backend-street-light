@@ -121,6 +121,7 @@ transformer.put("/:id", async (c) => {
     const updated = await prisma.transformer.update({
       where: { id },
       data: {
+        deviceId: body.deviceId,
         status: body.status,
         region: body.region,
         cluster: body.cluster,
