@@ -8,6 +8,11 @@ const toFloat = (v: unknown) => {
   const n = Number(v);
   return Number.isNaN(n) ? undefined : n;
 };
+const toInt = (v: unknown) => {
+  if (v === undefined || v === null || v === "") return undefined;
+  const n = Number(v);
+  return Number.isNaN(n) ? undefined : Math.trunc(n);
+};
 const toDate = (v: unknown) => {
   if (v === undefined || v === null || v === "") return undefined;
   const d = new Date(v as string);
@@ -29,8 +34,6 @@ transformer.get("/", async (c) => {
     include: {
       gateway: true,
       deviceModel: true,
-      parentTransformer: true,
-      childTransformers: true,
     },
   });
   return c.json(transformers);
@@ -45,8 +48,6 @@ transformer.get("/:id", async (c) => {
     include: {
       gateway: true,
       deviceModel: true,
-      parentTransformer: true,
-      childTransformers: true,
       lights: true,
       schedules: true,
     },
@@ -80,18 +81,18 @@ transformer.post("/", async (c) => {
         status: body.status ?? "OFF",
         region: body.region,
         cluster: body.cluster,
-        street: body.street,
+        installationLocation: body.installationLocation,
         latitude: toFloat(body.latitude),
         longitude: toFloat(body.longitude),
         voltage: body.voltage,
         loadCapacity: body.loadCapacity,
         ipRating: body.ipRating,
+        operationHours: toInt(body.operationHours),
         lastActive: toDate(body.lastActive),
         installationDate: toDate(body.installationDate),
         lastMaintenance: toDate(body.lastMaintenance),
         gatewayId: toId(body.gatewayId),
         deviceModelId: toId(body.deviceModelId),
-        parentNodeId: toId(body.parentNodeId),
       },
     });
     return c.json(created, 201);
@@ -102,8 +103,7 @@ transformer.post("/", async (c) => {
     if (err.code === "P2003") {
       return c.json(
         {
-          error:
-            "gatewayId, deviceModelId or parentNodeId refers to a record that doesn't exist",
+          error: "gatewayId or deviceModelId refers to a record that doesn't exist",
         },
         400,
       );
@@ -124,12 +124,13 @@ transformer.put("/:id", async (c) => {
         status: body.status,
         region: body.region,
         cluster: body.cluster,
-        street: body.street,
+        installationLocation: body.installationLocation,
         latitude: toFloat(body.latitude),
         longitude: toFloat(body.longitude),
         voltage: body.voltage,
         loadCapacity: body.loadCapacity,
         ipRating: body.ipRating,
+        operationHours: toInt(body.operationHours),
         lastActive: toDate(body.lastActive),
         installationDate: toDate(body.installationDate),
         lastMaintenance: toDate(body.lastMaintenance),
