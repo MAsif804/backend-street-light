@@ -1,5 +1,7 @@
 // Seeds the geography tables: City ─> Cluster ─> Location.
 // Idempotent — safe to re-run (upserts on the unique keys).
+// For Islamabad it is also authoritative: clusters/streets not in
+// ISLAMABAD_CLUSTER_MAPPING are removed so the DB matches this file exactly.
 // Run with:  bun run prisma/seed-geo.ts
 import { prisma } from "../src/lib/prisma";
 
@@ -30,16 +32,54 @@ const CITIES: string[] = [
 const DEFAULT_CLUSTERS = ["Red Zone", "Blue Area"];
 
 // Islamabad: each cluster/zone and the roads (locations) grouped under it.
-// The same road may appear under more than one cluster (e.g. Service Road East).
 const ISLAMABAD_CLUSTER_MAPPING: Record<string, string[]> = {
-  "Red Zone": ["Constitution Avenue", "Ataturk Avenue", "Embassy Road", "Club Road"],
-  "Blue Area": ["Jinnah Avenue", "Faisal Avenue", "Nazimuddin Road", "Ibn-e-Sina Road", "Khayaban-e-Suhrwardy"],
-  "G-10 Sector": ["Service Road East", "Service Road West", "Rohtas Road", "Kaghan Road", "Nara Road"],
-  "G-11 Sector": ["Ramna Road", "College Road", "Bazaar Road", "Service Road East", "Service Road West"],
-  "Main Arteries": [
-    "Margalla Road", "7th Avenue", "9th Avenue", "Agha Shahi Avenue", "Khayaban-e-Iqbal",
-    "Srinagar Highway", "Kashmir Highway", "Islamabad Expressway", "Park Road", "Lehtrar Road",
-    "Pir Sohawa Road", "Garden Avenue", "Municipal Road",
+  "Red Zone": [
+    "Constitution Avenue",
+    "Ataturk Avenue",
+    "Club Road",
+    "Third Avenue",
+    "Fourth Avenue",
+    "Sir Syed Road",
+    "Diplomatic Enclave Internal Roads",
+  ],
+
+  "Blue Area": [
+    "Jinnah Avenue",
+    "Fazal-ul-Haq Road",
+    "Nazim-ud-Din Road",
+    "Aku Road",
+    "Internal Business Plazas Connecting Streets",
+  ],
+
+  "Zone 2": [
+    "G.T. Road (Northwest)",
+    "Jinnah Boulevard",
+    "Srinagar Highway (Western Extension)",
+    "Internal Society Grids (B-17, F-15, G-15 to G-17, H-13 to H-17)",
+  ],
+
+  "Zone 3": [
+    "Khayaban-e-Iqbal",
+    "Margalla Avenue",
+    "Pir Sohawa Road",
+    "Saidpur Village Road",
+  ],
+
+  "Zone 4": [
+    "Park Road",
+    "Murree Road (Bhara Kahu)",
+    "Kuri Road",
+    "Lehtrar Road",
+    "Simly Dam Road",
+    "Bani Gala Main Road",
+  ],
+
+  "Zone 5": [
+    "Islamabad Expressway (Southern)",
+    "G.T. Road (Southeastern)",
+    "Soan Highway",
+    "DHA Expressway & Main Boulevards",
+    "Bahria Expressway & Main Boulevards",
   ],
 };
 
@@ -75,7 +115,17 @@ async function main() {
         for (const road of roads) {
           await upsertLocation(cluster.id, road);
         }
+        // Authoritative: drop any streets under this cluster no longer in the mapping.
+        await prisma.location.deleteMany({
+          where: { clusterId: cluster.id, name: { notIn: roads } },
+        });
       }
+      // Authoritative: drop any Islamabad clusters no longer in the mapping
+      // (cascades to their locations). Safe — devices store cluster as a plain
+      // string, not a foreign key, so no gateway/transformer is affected.
+      await prisma.cluster.deleteMany({
+        where: { cityId: city.id, name: { notIn: Object.keys(ISLAMABAD_CLUSTER_MAPPING) } },
+      });
     } else {
       for (const clusterName of DEFAULT_CLUSTERS) {
         await upsertCluster(city.id, clusterName);
