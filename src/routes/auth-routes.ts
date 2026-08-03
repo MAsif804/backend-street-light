@@ -71,6 +71,7 @@ auth.post("/login", async (c) => {
   return c.json({
     user: {
       id: user.id,
+      name: user.name,
       email: user.email,
       role: user.role,
       avatar: user.avatar,
@@ -88,6 +89,7 @@ auth.get("/me", authMiddleware, async (c) => {
     where: { id: payload.id },
     select: {
       id: true,
+      name: true,
       email: true,
       role: true,
       avatar: true,

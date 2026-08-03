@@ -9,6 +9,7 @@ user.use("*", authMiddleware); // protect all routes below
 
 const safeSelect = {
   id: true,
+  name: true,
   email: true,
   role: true,
   avatar: true,
@@ -38,6 +39,7 @@ user.put("/:id", async (c) => {
   const body = await c.req.json();
 
   const data: any = {
+    name: body.name,
     email: body.email,
     role: body.role,
     avatar: body.avatar,
