@@ -18,6 +18,8 @@ const app = new Hono();
 // Allow the Vite dev server (and other browser origins) to call the API.
 app.use("*", cors());
 
+app.get("/", (c) => c.json({ message: "Welcome to the InLights API!" }));
+
 app.route("/transformers", transformer);
 app.route("/gateways", gateway);
 app.route("/device-models", deviceModel);
@@ -28,5 +30,6 @@ app.route("/cities", city);
 app.route("/clusters", cluster);
 app.route("/locations", location);
 app.route("/schedules", schedule);
+
 
 export default app;
