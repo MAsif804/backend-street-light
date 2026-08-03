@@ -9,6 +9,7 @@ import user from "./routes/user";
 import city from "./routes/city";
 import cluster from "./routes/cluster";
 import location from "./routes/location";
+import schedule from "./routes/schedule";
 
 
 
@@ -26,6 +27,7 @@ app.route("/users", user);
 app.route("/cities", city);
 app.route("/clusters", cluster);
 app.route("/locations", location);
+app.route("/schedules", schedule);
 
 export default {
   port: 3000,
