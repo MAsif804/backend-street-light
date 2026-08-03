@@ -29,7 +29,4 @@ app.route("/clusters", cluster);
 app.route("/locations", location);
 app.route("/schedules", schedule);
 
-export default {
-  port: 3000,
-  fetch: app.fetch,
-};
+export default app;
