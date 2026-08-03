@@ -1,5 +1,14 @@
 {
   "compilerOptions": {
+    // Prisma 7's generated client uses `import.meta.url`, which cannot be
+    // expressed in CommonJS. Without these, tsc/Vercel default to CJS output
+    // and the deployed function dies with "Cannot use 'import.meta' outside a
+    // module". Must stay in sync with "type": "module" in package.json.
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
     "strict": true,
     "types": ["bun"],
     "jsx": "react-jsx",
