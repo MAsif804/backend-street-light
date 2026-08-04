@@ -42,6 +42,15 @@ enum ActionType {
   OFF
 }
 
+/// Severity of a gateway terminal line, mirroring the firmware's `Logger.h`
+/// levels. Drives the colour of the level column in the dashboard terminal.
+enum LogLevel {
+  INFO
+  OK
+  WARN
+  ERROR
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Auth
 // ─────────────────────────────────────────────────────────────────────────────
@@ -115,12 +124,38 @@ model Gateway {
   deviceModel   DeviceModel? @relation(fields: [deviceModelId], references: [id], onDelete: SetNull)
 
   transformers Transformer[]
+  logs         GatewayLog[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([status])
   @@index([region])
+}
+
+/// One line of a gateway's serial / WebSerial log, mirrored to the dashboard so
+/// the Inventory "Gateway Terminal" panel shows what the firmware is actually
+/// doing. Written by the gateway (POST /gateways/:id/logs), read by the UI.
+/// This is an append-only ring buffer in practice — prune with DELETE ?before=.
+model GatewayLog {
+  id      String   @id @default(cuid())
+  level   LogLevel @default(INFO)
+  /// Emitter tag rendered in brackets by the UI: "GATEWAY", "SYSTEM", or the
+  /// transformerId the line came from (e.g. "TR1CNSTN"). Stored without brackets.
+  source  String   @default("GATEWAY")
+  message String
+
+  /// Device clock when the line was emitted. Falls back to server receipt time
+  /// when the gateway has no RTC yet, so ordering is always well-defined.
+  timestamp DateTime @default(now())
+
+  gatewayId String
+  gateway   Gateway @relation(fields: [gatewayId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  // The terminal only ever asks for "newest N lines for this gateway".
+  @@index([gatewayId, timestamp])
 }
 
 /// Controls a group of Lights. May sit under a Gateway and/or a parent Transformer,

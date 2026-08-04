@@ -26,7 +26,39 @@ const toId = (v: unknown) => {
     : (s as string);
 };
 
+const LOG_LEVELS = ["INFO", "OK", "WARN", "ERROR"] as const;
+type LogLevelValue = (typeof LOG_LEVELS)[number];
+
+// Firmware writes lines like "[GATEWAY]" / "[TR1CNSTN]"; the UI adds the
+// brackets itself, so strip them on the way in and keep the tag canonical.
+const toSource = (v: unknown) => {
+  const s = String(v ?? "").trim().replace(/^\[|\]$/g, "").trim();
+  return s === "" ? "GATEWAY" : s.slice(0, 64).toUpperCase();
+};
+
+const toLevel = (v: unknown): LogLevelValue | undefined => {
+  const s = String(v ?? "").trim().toUpperCase();
+  return (LOG_LEVELS as readonly string[]).includes(s)
+    ? (s as LogLevelValue)
+    : undefined;
+};
+
 const gateway = new Hono();
+
+/**
+ * Resolve the `:id` path segment to a Gateway primary key.
+ *
+ * The dashboard holds the cuid, but the firmware only knows its configured
+ * Sensor ID (`deviceId`, e.g. "GW1CNST"), so accept either and let the device
+ * post logs without a boot-time lookup. Returns null when nothing matches.
+ */
+async function resolveGatewayId(idOrDeviceId: string): Promise<string | null> {
+  const found = await prisma.gateway.findFirst({
+    where: { OR: [{ id: idOrDeviceId }, { deviceId: idOrDeviceId }] },
+    select: { id: true },
+  });
+  return found?.id ?? null;
+}
 
 // GET /gateways — list all gateways
 gateway.get("/", async (c) => {
@@ -186,6 +218,114 @@ gateway.delete("/:id", async (c) => {
     }
     return c.json({ error: err.message }, 400);
   }
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// Gateway terminal logs — what the Inventory "Gateway Terminal" panel renders.
+// The gateway firmware appends lines here; the dashboard polls them back.
+// `:id` accepts either the cuid or the Sensor ID (deviceId).
+// ───────────────────────────────────────────────────────────────────────────
+
+// GET /gateways/:id/logs?limit=&since=&level=
+//   limit — newest N lines (default 200, max 1000)
+//   since — ISO timestamp, INCLUSIVE; used by the terminal to poll for new lines.
+//           Inclusive on purpose: two lines can share a millisecond, and an
+//           exclusive cursor would silently drop the second one. Callers pass
+//           the newest timestamp they hold and de-duplicate by id.
+//   level — filter to a single severity (INFO | OK | WARN | ERROR)
+// Always returned oldest-first so the terminal can append straight to the bottom.
+gateway.get("/:id/logs", async (c) => {
+  const gatewayId = await resolveGatewayId(c.req.param("id"));
+  if (!gatewayId) {
+    return c.json({ error: "Gateway not found" }, 404);
+  }
+
+  const limit = Math.min(Math.max(toInt(c.req.query("limit")) ?? 200, 1), 1000);
+  const since = toDate(c.req.query("since"));
+  const level = toLevel(c.req.query("level"));
+
+  // Take the newest N (that's what a terminal shows), then flip to chronological.
+  const rows = await prisma.gatewayLog.findMany({
+    where: {
+      gatewayId,
+      ...(since ? { timestamp: { gte: since } } : {}),
+      ...(level ? { level } : {}),
+    },
+    orderBy: [{ timestamp: "desc" }, { createdAt: "desc" }],
+    take: limit,
+  });
+
+  return c.json(rows.reverse());
+});
+
+// POST /gateways/:id/logs — append one line or a batch.
+//   single: { message, level?, source?, timestamp? }
+//   batch:  { logs: [ { message, ... }, ... ] }  (max 200 per request)
+// `timestamp` is the device clock; omit it and the server's receipt time is used
+// (the gateway has no RTC until it syncs, see FIRMWARE_INTEGRATION_PLAN §4.8).
+gateway.post("/:id/logs", async (c) => {
+  const gatewayId = await resolveGatewayId(c.req.param("id"));
+  if (!gatewayId) {
+    return c.json({ error: "Gateway not found" }, 404);
+  }
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Body must be JSON" }, 400);
+  }
+
+  const incoming = Array.isArray(body)
+    ? body
+    : Array.isArray(body?.logs)
+      ? body.logs
+      : [body];
+
+  if (incoming.length === 0) {
+    return c.json({ error: "No log lines in request" }, 400);
+  }
+  if (incoming.length > 200) {
+    return c.json({ error: "At most 200 log lines per request" }, 400);
+  }
+
+  const data = [];
+  for (const entry of incoming) {
+    const message = typeof entry?.message === "string" ? entry.message.trim() : "";
+    if (!message) {
+      return c.json({ error: "message is required on every log line" }, 400);
+    }
+    data.push({
+      gatewayId,
+      message: message.slice(0, 1000),
+      level: toLevel(entry?.level) ?? "INFO",
+      source: toSource(entry?.source),
+      timestamp: toDate(entry?.timestamp),
+    });
+  }
+
+  try {
+    const result = await prisma.gatewayLog.createMany({ data });
+    return c.json({ created: result.count }, 201);
+  } catch (err: any) {
+    return c.json({ error: err.message }, 400);
+  }
+});
+
+// DELETE /gateways/:id/logs?before=<iso> — clear the terminal, or prune old
+// lines (retention). Without `before` every line for the gateway is removed.
+gateway.delete("/:id/logs", async (c) => {
+  const gatewayId = await resolveGatewayId(c.req.param("id"));
+  if (!gatewayId) {
+    return c.json({ error: "Gateway not found" }, 404);
+  }
+
+  const before = toDate(c.req.query("before"));
+  const result = await prisma.gatewayLog.deleteMany({
+    where: { gatewayId, ...(before ? { timestamp: { lt: before } } : {}) },
+  });
+
+  return c.json({ deleted: result.count });
 });
 
 export default gateway;
