@@ -138,7 +138,14 @@ model Gateway {
 /// doing. Written by the gateway (POST /gateways/:id/logs), read by the UI.
 /// This is an append-only ring buffer in practice — prune with DELETE ?before=.
 model GatewayLog {
-  id      String   @id @default(cuid())
+  id String @id @default(cuid())
+
+  /// Monotonic insertion counter, and the terminal's ordering + paging key.
+  /// `timestamp` cannot do this job: the firmware posts a batch of lines with a
+  /// single device-clock reading, so a whole batch shares one millisecond — and
+  /// a device with no RTC can even move its clock backwards mid-session.
+  seq Int @default(autoincrement())
+
   level   LogLevel @default(INFO)
   /// Emitter tag rendered in brackets by the UI: "GATEWAY", "SYSTEM", or the
   /// transformerId the line came from (e.g. "TR1CNSTN"). Stored without brackets.
@@ -154,7 +161,10 @@ model GatewayLog {
 
   createdAt DateTime @default(now())
 
-  // The terminal only ever asks for "newest N lines for this gateway".
+  // The terminal only ever asks for "newest N lines for this gateway", and
+  // polls with "everything after seq N".
+  @@index([gatewayId, seq])
+  // Serves the optional `?since=` time-range filter.
   @@index([gatewayId, timestamp])
 }
 

@@ -226,13 +226,13 @@ gateway.delete("/:id", async (c) => {
 // `:id` accepts either the cuid or the Sensor ID (deviceId).
 // ───────────────────────────────────────────────────────────────────────────
 
-// GET /gateways/:id/logs?limit=&since=&level=
-//   limit — newest N lines (default 200, max 1000)
-//   since — ISO timestamp, INCLUSIVE; used by the terminal to poll for new lines.
-//           Inclusive on purpose: two lines can share a millisecond, and an
-//           exclusive cursor would silently drop the second one. Callers pass
-//           the newest timestamp they hold and de-duplicate by id.
-//   level — filter to a single severity (INFO | OK | WARN | ERROR)
+// GET /gateways/:id/logs?limit=&afterSeq=&since=&level=
+//   limit    — newest N lines (default 200, max 1000)
+//   afterSeq — everything written after this `seq`; the terminal's poll cursor.
+//              Exact and clock-independent, so polls never duplicate or skip.
+//   since    — ISO timestamp lower bound (inclusive). A convenience time filter
+//              ("last hour"), NOT a reliable poll cursor — use afterSeq for that.
+//   level    — filter to a single severity (INFO | OK | WARN | ERROR)
 // Always returned oldest-first so the terminal can append straight to the bottom.
 gateway.get("/:id/logs", async (c) => {
   const gatewayId = await resolveGatewayId(c.req.param("id"));
@@ -241,17 +241,20 @@ gateway.get("/:id/logs", async (c) => {
   }
 
   const limit = Math.min(Math.max(toInt(c.req.query("limit")) ?? 200, 1), 1000);
+  const afterSeq = toInt(c.req.query("afterSeq"));
   const since = toDate(c.req.query("since"));
   const level = toLevel(c.req.query("level"));
 
-  // Take the newest N (that's what a terminal shows), then flip to chronological.
   const rows = await prisma.gatewayLog.findMany({
     where: {
       gatewayId,
+      ...(afterSeq !== undefined ? { seq: { gt: afterSeq } } : {}),
       ...(since ? { timestamp: { gte: since } } : {}),
       ...(level ? { level } : {}),
     },
-    orderBy: [{ timestamp: "desc" }, { createdAt: "desc" }],
+    // Take the newest N — that's what a terminal shows — then flip to
+    // chronological order below.
+    orderBy: { seq: "desc" },
     take: limit,
   });
 
