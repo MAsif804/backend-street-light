@@ -221,6 +221,84 @@ gateway.delete("/:id", async (c) => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
+// Data-on-demand — the "Fetch Data" button.
+//
+// The dashboard leases a streaming window on a gateway; the gateway polls that
+// lease and translates it into LoRa 999 (start streaming) / 998 (stop) for its
+// transformers, then posts their uplinks to /transformers/telemetry.
+//
+// The lease is an expiry rather than a boolean so a closed browser tab cannot
+// leave the fleet transmitting. The dashboard renews it while it is open.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** How long a single lease lasts. The dashboard renews well inside this. */
+const DEFAULT_STREAM_MINUTES = 3;
+/** Ceiling on what a caller may ask for, so one request can't pin the radio. */
+const MAX_STREAM_MINUTES = 30;
+
+// POST /gateways/:id/stream — { enabled: boolean, minutes?: number }
+// Start (or renew) the lease, or clear it. Called by the dashboard.
+gateway.post("/:id/stream", async (c) => {
+  const gatewayId = await resolveGatewayId(c.req.param("id"));
+  if (!gatewayId) {
+    return c.json({ error: "Gateway not found" }, 404);
+  }
+
+  let body: any = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    // An empty body is fine — treated as "enable with the default window".
+  }
+
+  const enabled = body?.enabled !== false;
+  const minutes = Math.min(
+    Math.max(toInt(body?.minutes) ?? DEFAULT_STREAM_MINUTES, 1),
+    MAX_STREAM_MINUTES,
+  );
+
+  const streamUntil = enabled ? new Date(Date.now() + minutes * 60_000) : null;
+
+  const updated = await prisma.gateway.update({
+    where: { id: gatewayId },
+    data: { streamUntil },
+    select: { id: true, deviceId: true, streamUntil: true },
+  });
+
+  // Make the request visible in the terminal — an operator pressing the button
+  // should be able to see it land, and see the gateway act on it.
+  await prisma.gatewayLog.create({
+    data: {
+      gatewayId,
+      level: "INFO",
+      source: "DASHBOARD",
+      message: enabled
+        ? `Data-on-demand requested (lease ${minutes}m)`
+        : "Data-on-demand stopped",
+    },
+  });
+
+  return c.json({ ...updated, streaming: enabled });
+});
+
+// GET /gateways/:id/stream — the gateway firmware's poll. Deliberately tiny:
+// this is hit every few seconds by a device on a metered link.
+gateway.get("/:id/stream", async (c) => {
+  const gatewayId = await resolveGatewayId(c.req.param("id"));
+  if (!gatewayId) {
+    return c.json({ error: "Gateway not found" }, 404);
+  }
+
+  const found = await prisma.gateway.findUnique({
+    where: { id: gatewayId },
+    select: { streamUntil: true },
+  });
+
+  const streaming = !!found?.streamUntil && found.streamUntil.getTime() > Date.now();
+  return c.json({ streaming, streamUntil: found?.streamUntil ?? null });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
 // Gateway terminal logs — what the Inventory "Gateway Terminal" panel renders.
 // The gateway firmware appends lines here; the dashboard polls them back.
 // `:id` accepts either the cuid or the Sensor ID (deviceId).

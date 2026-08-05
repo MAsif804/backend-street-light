@@ -120,6 +120,17 @@ model Gateway {
   installationDate DateTime?
   lastMaintenance  DateTime?
 
+  /// Data-on-demand lease. While `now < streamUntil` this gateway tells its
+  /// transformers to stream telemetry (LoRa 999); once it lapses or is cleared
+  /// it tells them to stop (998).
+  ///
+  /// It is an EXPIRY, not a boolean, on purpose. Streaming costs ~1 frame per
+  /// transformer per 20-30 s and LoRa airtime is the fleet's binding constraint,
+  /// so a dashboard that is closed, crashed or offline must not be able to leave
+  /// the radio saturated forever. The open dashboard renews the lease; anything
+  /// else and it simply runs out.
+  streamUntil DateTime?
+
   deviceModelId String?
   deviceModel   DeviceModel? @relation(fields: [deviceModelId], references: [id], onDelete: SetNull)
 
@@ -131,6 +142,7 @@ model Gateway {
 
   @@index([status])
   @@index([region])
+  @@index([streamUntil])
 }
 
 /// One line of a gateway's serial / WebSerial log, mirrored to the dashboard so
@@ -191,6 +203,24 @@ model Transformer {
   installationDate DateTime?
   lastMaintenance  DateTime?
 
+  // ── Telemetry reported BY the field unit ────────────────────────────────
+  // Everything below is written by the gateway from LoRa uplinks and is never
+  // written by the dashboard. `status` above stays the *desired* state; these
+  // are what the hardware says is actually true. Keeping them apart is what
+  // stops the write-back feedback loop between dashboard and firmware.
+
+  /// Actual relay state last reported over LoRa. Null = never heard from.
+  reportedStatus DeviceStatus?
+
+  /// Last reported fault code, from the transformer's ACS712 current reading:
+  /// 0 healthy · 1 one lamp out · 2 both lamps out · 3 sensor/contactor fault.
+  faultCode Int @default(0)
+
+  /// When the last telemetry frame arrived. Distinct from `lastActive`, which
+  /// the gateway's coarse round-robin liveness loop also touches — the dashboard
+  /// needs a precise "is data flowing right now" signal for its indicator.
+  lastReportAt DateTime?
+
   gatewayId     String?
   gateway       Gateway?     @relation(fields: [gatewayId], references: [id], onDelete: SetNull)
 
@@ -205,6 +235,7 @@ model Transformer {
 
   @@index([status])
   @@index([gatewayId])
+  @@index([lastReportAt])
 }
 
 /// A physical street light, controlled by a Node.
