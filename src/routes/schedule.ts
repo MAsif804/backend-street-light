@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { prisma } from "../lib/prisma";
+import { buildPlan, expectedState, localMinutesNow } from "../lib/schedule-engine";
 
 // Requests (from forms / Postman) often send everything as strings. Coerce.
 const toInt = (v: unknown, d = 0) => {
@@ -64,6 +65,106 @@ schedule.get("/", async (c) => {
   });
   return c.json(schedules);
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// The runner. Registered BEFORE "/:id" on purpose — otherwise "/schedules/run"
+// is a candidate for the param route and resolves as a schedule id.
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * POST|GET /schedules/run — evaluate every active schedule and reconcile
+ * `Transformer.status` to match. This is what actually makes a schedule *do*
+ * something; without it a saved schedule is inert data.
+ *
+ * Both verbs exist because Vercel Cron only issues GET.
+ *
+ * Reconciliation is state-based, not edge-based: every run asks "what should
+ * this transformer be right now" rather than "did a boundary just pass". That
+ * makes a missed run (cold start, outage, redeploy) self-healing — the next run
+ * still puts the fleet right. The cost is that a manual dashboard toggle inside
+ * a scheduled window is reverted on the next run; there is no override grace
+ * period server-side (the firmware has one, via `overrideActive`).
+ */
+async function runSchedules(c: any) {
+  // Vercel Cron sends `Authorization: Bearer $CRON_SECRET` when the env var is
+  // set. When it isn't (local dev), the endpoint is open — same as every other
+  // device route here.
+  const secret = process.env.CRON_SECRET;
+  if (secret && c.req.header("authorization") !== `Bearer ${secret}`) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const now = new Date();
+  const nowMinutes = localMinutesNow(now);
+
+  const [schedules, transformers] = await Promise.all([
+    prisma.schedule.findMany({ where: { isActive: true }, include: fullInclude }),
+    prisma.transformer.findMany({
+      select: { id: true, transformerId: true, status: true, gatewayId: true },
+    }),
+  ]);
+
+  const plan = buildPlan(schedules, now);
+
+  const toOn: typeof transformers = [];
+  const toOff: typeof transformers = [];
+  let governed = 0;
+
+  for (const t of transformers) {
+    const want = expectedState(t.id, plan, nowMinutes);
+    if (want === null) continue; // nothing scheduled — leave the operator's value
+    governed++;
+    if (want === t.status) continue;
+    (want === "ON" ? toOn : toOff).push(t);
+  }
+
+  if (toOn.length > 0) {
+    await prisma.transformer.updateMany({
+      where: { id: { in: toOn.map((t) => t.id) } },
+      data: { status: "ON" },
+    });
+  }
+  if (toOff.length > 0) {
+    await prisma.transformer.updateMany({
+      where: { id: { in: toOff.map((t) => t.id) } },
+      data: { status: "OFF" },
+    });
+  }
+
+  // Mirror each action into the owning gateway's terminal, so a schedule firing
+  // is visible in the UI instead of being a silent status flip.
+  const changed = [
+    ...toOn.map((t) => ({ t, state: "ON" as const })),
+    ...toOff.map((t) => ({ t, state: "OFF" as const })),
+  ];
+  const logs = changed
+    .filter((x) => x.t.gatewayId)
+    .map((x) => ({
+      gatewayId: x.t.gatewayId as string,
+      level: "INFO" as const,
+      source: "SCHEDULER",
+      message: `Schedule -> ${x.t.transformerId} ${x.state}`,
+    }));
+  if (logs.length > 0) {
+    await prisma.gatewayLog.createMany({ data: logs });
+  }
+
+  return c.json({
+    ranAt: now.toISOString(),
+    localMinutes: nowMinutes,
+    localTime: `${String(Math.floor(nowMinutes / 60)).padStart(2, "0")}:${String(nowMinutes % 60).padStart(2, "0")}`,
+    activeSchedules: schedules.length,
+    globalWindows: plan.global.length,
+    scopedTransformers: plan.byTransformer.size,
+    expiredConditions: plan.expired,
+    unparseableTimePairs: plan.unparseable,
+    governed,
+    changed: changed.map((x) => ({ transformerId: x.t.transformerId, status: x.state })),
+  });
+}
+
+schedule.post("/run", runSchedules);
+schedule.get("/run", runSchedules);
 
 // GET /schedules/:id — one schedule with everything
 schedule.get("/:id", async (c) => {
