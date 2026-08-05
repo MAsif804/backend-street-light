@@ -692,6 +692,33 @@ grep -c "require(" tmp-check/src/generated/prisma/client.js   # must print 0
 **2 — `src/generated/prisma` is gitignored** and rebuilt on every deploy by the
 `postinstall: prisma generate` hook. Never commit it.
 
+**3 — Do not add a sub-daily `crons` entry to `vercel.json` on a Hobby plan.**
+Vercel validates cron expressions at *deploy* time and rejects anything more
+frequent than once a day on Hobby — it fails the whole build, so the API stops
+updating entirely and the symptom is a stale deployment serving 404s for new
+routes, not a cron-specific error. This bit us once: every deploy from
+`46975d8` onward silently stopped landing. See "Running the schedule runner"
+below for how to drive it without Vercel Cron.
+
+### Running the schedule runner
+
+`GET|POST /schedules/run` evaluates every active schedule and reconciles
+`Transformer.status`. Nothing calls it on its own — it needs a trigger roughly
+once a minute:
+
+- **Vercel Cron (Pro only).** Add to `vercel.json`:
+  ```json
+  "crons": [{ "path": "/schedules/run", "schedule": "* * * * *" }]
+  ```
+- **Any external scheduler** (cron-job.org, GitHub Actions, an always-on box) —
+  works on every plan:
+  ```bash
+  curl -X POST https://<host>/schedules/run -H "Authorization: Bearer $CRON_SECRET"
+  ```
+
+Set `CRON_SECRET` in the environment and the endpoint requires that bearer
+token; leave it unset and the endpoint is open, like the other device routes.
+
 ### Environment variables on Vercel
 
 Set `DATABASE_URL` and `JWT_SECRET` under Project Settings → Environment
