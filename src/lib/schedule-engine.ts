@@ -131,18 +131,24 @@ export function buildPlan(schedules: ScheduleLike[], now: Date): SchedulePlan {
         }
       }
 
-      // A condition of type OFF describes lamps-OFF periods, so its pair is
-      // stored inverted and swapped back into a lamps-ON window here.
-      const invert = String(cond.type).toUpperCase() === "OFF";
-
+      // A time pair means exactly what its field names say: ON at `onTime`, OFF
+      // at `offTime`. `Condition.type` is NOT read here, and must not be.
+      //
+      // It used to swap the pair whenever type was OFF, which inverted every
+      // schedule. That flag is only an editor mode in the condition form — the
+      // "Transformer On / Transformer Off" switch picks which half of the pair
+      // you are typing into (`row[type]`), so it ends up holding whichever side
+      // was edited last. Treating it as a semantic inversion meant setting "on
+      // 6 PM, off 6 AM" and then touching the off time lit the street all day.
+      // The scheduler graph never inverted, which is why the preview looked
+      // right while the fleet did the opposite.
       for (const tp of cond.timePairs ?? []) {
-        let onMin = to24hMinutes(tp.onTime, tp.onPeriod);
-        let offMin = to24hMinutes(tp.offTime, tp.offPeriod);
+        const onMin = to24hMinutes(tp.onTime, tp.onPeriod);
+        const offMin = to24hMinutes(tp.offTime, tp.offPeriod);
         if (onMin === MIN_UNSET || offMin === MIN_UNSET) {
           plan.unparseable++;
           continue;
         }
-        if (invert) [onMin, offMin] = [offMin, onMin];
         if (onMin === offMin) continue; // zero-length window commands nothing
 
         if (isGlobal) {
