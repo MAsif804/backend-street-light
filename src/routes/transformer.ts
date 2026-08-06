@@ -42,12 +42,18 @@ transformer.get("/", async (c) => {
 // ───────────────────────────────────────────────────────────────────────────
 // POST /transformers/telemetry — LoRa uplinks, pushed by a gateway.
 //
-// Body: { readings: [ { id, relay, fault } ] }  (or a bare array)
+// Body: { readings: [ { id, relay, fault, temp } ] }  (or a bare array)
 //   id    — the 4-digit LoRa radio address from the uplink frame `{IIII-R-F}`,
 //           matched against `deviceId` first, then the tail of `transformerId`
 //           (the same derivation the gateway's registry uses to address units).
 //   relay — 0 | 1, the ACTUAL relay position
 //   fault — 0 healthy · 1 one lamp out · 2 both lamps out · 3 sensor fault
+//   temp  — °C from the DS18B20 probe. THREE-STATE, matching what the gateway
+//           sends: key absent = leave the stored value alone (an older gateway
+//           build that predates the probe); explicit null = this unit reports no
+//           temperature, so clear it; a number = store it. Omitting the key and
+//           sending null must stay distinct, or a probe that comes off freezes
+//           its last reading in the database for good.
 //
 // This writes `reportedStatus`, NEVER `status`. `status` is the desired state
 // and belongs to the control plane (dashboard + schedule runner); letting a
@@ -94,11 +100,27 @@ transformer.post("/telemetry", async (c) => {
   }
 
   const now = new Date();
-  const applied: { address: string; relay: number; fault: number }[] = [];
+  const applied: { address: string; relay: number; fault: number; temp?: number | null }[] = [];
   const unknown: string[] = [];
-  // Readings sharing a (relay, fault) pair can go out in one UPDATE, so a batch
-  // costs at most a couple of statements instead of one per frame.
+  // Readings sharing an identical value set can go out in one UPDATE, so a batch
+  // costs at most a couple of statements instead of one per frame. Temperature
+  // is part of the key — two units are rarely at the same reading to a tenth of
+  // a degree, so in practice this now groups mostly by relay/fault among the
+  // units with no probe, and runs one statement each for the rest. At
+  // ACTIVITY_MAX_PER_CYCLE (40) per push that is a handful of statements, not a
+  // reason to give up batching.
   const groups = new Map<string, string[]>();
+
+  // `undefined` = key absent, leave the column alone. `null` = clear it.
+  const parseTemp = (raw: unknown): number | null | undefined => {
+    if (raw === undefined) return undefined;
+    if (raw === null || raw === "") return null;
+    const n = Number(raw);
+    // Out-of-range or unparseable is treated as "no reading" rather than
+    // rejecting the whole frame — the relay and fault half still matters.
+    if (!Number.isFinite(n) || n < -55 || n > 125) return null;
+    return Math.round(n * 10) / 10;
+  };
 
   for (const r of readings) {
     const address = digits4(String(r?.id ?? r?.address ?? ""));
@@ -113,15 +135,26 @@ transformer.post("/telemetry", async (c) => {
     if (relay !== 0 && relay !== 1) continue; // malformed frame — drop it
     if (fault < 0 || fault > 9) continue;
 
-    const key = `${relay}:${fault}`;
+    // Key PRESENCE, not `??`. `r.temp ?? r.temperature` collapses an explicit
+    // null into undefined, which would silently turn "this unit has no probe"
+    // back into "leave the column alone" — the stale-reading bug this whole
+    // three-state contract exists to avoid.
+    const obj = r !== null && typeof r === "object" ? (r as Record<string, unknown>) : {};
+    const rawTemp = "temp" in obj ? obj.temp : "temperature" in obj ? obj.temperature : undefined;
+    const temp = parseTemp(rawTemp);
+
+    const key = `${relay}:${fault}:${temp === undefined ? "skip" : temp}`;
     const list = groups.get(key) ?? [];
     list.push(pk);
     groups.set(key, list);
-    applied.push({ address, relay, fault });
+    applied.push({ address, relay, fault, ...(temp === undefined ? {} : { temp }) });
   }
 
   for (const [key, ids] of groups) {
-    const [relay, fault] = key.split(":").map(Number);
+    const [relayRaw, faultRaw, tempRaw] = key.split(":");
+    const relay = Number(relayRaw);
+    const fault = Number(faultRaw);
+
     await prisma.transformer.updateMany({
       where: { id: { in: ids } },
       data: {
@@ -129,6 +162,11 @@ transformer.post("/telemetry", async (c) => {
         faultCode: fault,
         lastReportAt: now,
         lastActive: now,
+        // Absent from the payload → not in the `data` object at all, so Prisma
+        // leaves the stored value as it is.
+        ...(tempRaw === "skip"
+          ? {}
+          : { temperature: tempRaw === "null" ? null : Number(tempRaw) }),
       },
     });
   }

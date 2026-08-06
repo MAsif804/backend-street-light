@@ -216,6 +216,12 @@ model Transformer {
   /// 0 healthy · 1 one lamp out · 2 both lamps out · 3 sensor/contactor fault.
   faultCode Int @default(0)
 
+  /// Enclosure temperature in °C from the unit's DS18B20 probe. NULL means this
+  /// transformer has never reported one — no probe fitted, older firmware, or a
+  /// lead that has come off. The dashboard hides the reading entirely when null;
+  /// the inventory detail page shows it as NULL.
+  temperature Float?
+
   /// When the last telemetry frame arrived. Distinct from `lastActive`, which
   /// the gateway's coarse round-robin liveness loop also touches — the dashboard
   /// needs a precise "is data flowing right now" signal for its indicator.
